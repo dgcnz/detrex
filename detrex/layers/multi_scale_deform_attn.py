@@ -420,9 +420,10 @@ def create_dummy_func(func, dependency, message=""):
 try:
     from detrex import _C
 except ImportError:
+    pass
     # TODO: register ops natively so there is no need to import _C.
-    _msg = "detrex is not compiled successfully, please build following the instructions!"
-    _args = ("detrex._C", _msg)
-    MultiScaleDeformableAttention = create_dummy_class(  # noqa
-        "MultiScaleDeformableAttention", *_args
-    )
+    # _msg = "detrex is not compiled successfully, please build following the instructions!"
+    # _args = ("detrex._C", _msg)
+    # MultiScaleDeformableAttention = create_dummy_class(  # noqa
+    #     "MultiScaleDeformableAttention", *_args
+    # )
