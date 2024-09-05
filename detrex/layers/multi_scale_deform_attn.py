@@ -25,13 +25,14 @@
 
 import math
 import warnings
-from typing import Optional
+from typing import Optional, List, Tuple, Union
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.autograd import Function
 from torch.autograd.function import once_differentiable
 from torch.nn.init import constant_, xavier_uniform_
+from detectron2.layers.wrappers import check_if_dynamo_compiling
 
 
 # helpers
@@ -95,11 +96,12 @@ class MultiScaleDeformableAttnFunction(Function):
 
 def multi_scale_deformable_attn_pytorch(
     value: torch.Tensor,
-    value_spatial_shapes: torch.Tensor,
+    value_spatial_shapes: Union[torch.Tensor, List[Tuple[int, int]]],
     sampling_locations: torch.Tensor,
     attention_weights: torch.Tensor,
 ) -> torch.Tensor:
-
+    if check_if_dynamo_compiling():
+        assert isinstance(value_spatial_shapes, list)
     bs, _, num_heads, embed_dims = value.shape
     _, num_queries, num_heads, num_levels, num_points, _ = sampling_locations.shape
     value_list = value.split([H_ * W_ for H_, W_ in value_spatial_shapes], dim=1)
@@ -231,11 +233,10 @@ class MultiScaleDeformableAttention(nn.Module):
         query_pos: Optional[torch.Tensor] = None,
         key_padding_mask: Optional[torch.Tensor] = None,
         reference_points: Optional[torch.Tensor] = None,
-        spatial_shapes: Optional[torch.Tensor] = None,
+        spatial_shapes: Optional[Union[torch.Tensor, List[Tuple[int, int]]]] = None,
         level_start_index: Optional[torch.Tensor] = None,
         **kwargs
     ) -> torch.Tensor:
-
         """Forward Function of MultiScaleDeformableAttention
 
         Args:
@@ -266,6 +267,8 @@ class MultiScaleDeformableAttention(nn.Module):
         Returns:
             torch.Tensor: forward results with shape `(num_query, bs, embed_dim)`
         """
+        if check_if_dynamo_compiling():
+            assert isinstance(spatial_shapes, list)
 
         if value is None:
             value = query
@@ -283,7 +286,12 @@ class MultiScaleDeformableAttention(nn.Module):
         bs, num_query, _ = query.shape
         bs, num_value, _ = value.shape
 
-        assert (spatial_shapes[:, 0] * spatial_shapes[:, 1]).sum() == num_value
+        if not check_if_dynamo_compiling():
+            # When tracing with Dynamo, we can't have data dependent expressions
+            if isinstance(spatial_shapes, torch.Tensor):
+                assert (spatial_shapes[:, 0] * spatial_shapes[:, 1]).sum() == num_value
+            else:
+                assert sum(map(math.prod, spatial_shapes)) == num_value
 
         # value projection
         value = self.value_proj(value)
@@ -311,13 +319,16 @@ class MultiScaleDeformableAttention(nn.Module):
 
         # bs, num_query, num_heads, num_levels, num_points, 2
         if reference_points.shape[-1] == 2:
-            
             # reference_points   [bs, all hw, 4, 2] -> [bs, all hw, 1, 4, 1, 2]
             # sampling_offsets   [bs, all hw, 8, 4, 4, 2]
             # offset_normalizer  [4, 2] -> [1, 1, 1, 4, 1, 2]
             # references_points + sampling_offsets
-            
-            offset_normalizer = torch.stack([spatial_shapes[..., 1], spatial_shapes[..., 0]], -1)
+            if isinstance(spatial_shapes, torch.Tensor):
+                offset_normalizer = torch.stack(
+                    [spatial_shapes[..., 1], spatial_shapes[..., 0]], -1
+                )
+            else:
+                offset_normalizer = torch.tensor([s[::-1] for s in spatial_shapes])
             sampling_locations = (
                 reference_points[:, :, None, :, None, :]
                 + sampling_offsets / offset_normalizer[None, None, None, :, None, :]
@@ -336,11 +347,11 @@ class MultiScaleDeformableAttention(nn.Module):
                     reference_points.shape[-1]
                 )
             )
-        
+
         # the original impl for fp32 training
         if torch.cuda.is_available() and value.is_cuda:
             output = MultiScaleDeformableAttnFunction.apply(
-                value.to(torch.float32) if value.dtype==torch.float16 else value,
+                value.to(torch.float32) if value.dtype == torch.float16 else value,
                 spatial_shapes,
                 level_start_index,
                 sampling_locations,
@@ -352,8 +363,8 @@ class MultiScaleDeformableAttention(nn.Module):
                 value, spatial_shapes, sampling_locations, attention_weights
             )
 
-        if value.dtype==torch.float16:
-            output=output.to(torch.float16)
+        if value.dtype == torch.float16:
+            output = output.to(torch.float16)
 
         output = self.output_proj(output)
 
