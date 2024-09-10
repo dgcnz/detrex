@@ -33,6 +33,7 @@ from torch.autograd import Function
 from torch.autograd.function import once_differentiable
 from torch.nn.init import constant_, xavier_uniform_
 from detectron2.layers.wrappers import check_if_dynamo_compiling
+import logging
 
 
 # helpers
@@ -328,7 +329,7 @@ class MultiScaleDeformableAttention(nn.Module):
                     [spatial_shapes[..., 1], spatial_shapes[..., 0]], -1
                 )
             else:
-                offset_normalizer = torch.tensor([s[::-1] for s in spatial_shapes])
+                offset_normalizer = torch.tensor([s[::-1] for s in spatial_shapes], device=sampling_offsets.device)
             sampling_locations = (
                 reference_points[:, :, None, :, None, :]
                 + sampling_offsets / offset_normalizer[None, None, None, :, None, :]
@@ -349,7 +350,8 @@ class MultiScaleDeformableAttention(nn.Module):
             )
 
         # the original impl for fp32 training
-        if torch.cuda.is_available() and value.is_cuda:
+        if torch.cuda.is_available() and value.is_cuda and _KERNEL_COMPILED: # TODO: adapt cuda kernel to specialize spatial_shapes values
+            # TODO: implement cuda kernel compatible with dynamo
             output = MultiScaleDeformableAttnFunction.apply(
                 value.to(torch.float32) if value.dtype == torch.float16 else value,
                 spatial_shapes,
@@ -427,11 +429,13 @@ def create_dummy_func(func, dependency, message=""):
 
     return _dummy
 
-
+_KERNEL_COMPILED = False
 try:
     from detrex import _C
+    _KERNEL_COMPILED = True
 except ImportError:
-    pass
+    logging.basicConfig(level=logging.INFO)
+    logging.warning("CUDA Kernel is not compiled, using pytorch multi_scale_deform_attn")
     # TODO: register ops natively so there is no need to import _C.
     # _msg = "detrex is not compiled successfully, please build following the instructions!"
     # _args = ("detrex._C", _msg)
