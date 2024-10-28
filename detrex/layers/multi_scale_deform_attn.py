@@ -350,7 +350,7 @@ class MultiScaleDeformableAttention(nn.Module):
             )
 
         # the original impl for fp32 training
-        if torch.cuda.is_available() and value.is_cuda and _KERNEL_COMPILED: # TODO: adapt cuda kernel to specialize spatial_shapes values
+        if torch.cuda.is_available() and value.is_cuda and _KERNEL_COMPILED and _ENABLE_CUDA_MSDA:
             # TODO: implement cuda kernel compatible with dynamo
             output = MultiScaleDeformableAttnFunction.apply(
                 value.to(torch.float32) if value.dtype == torch.float16 else value,
@@ -430,6 +430,7 @@ def create_dummy_func(func, dependency, message=""):
     return _dummy
 
 _KERNEL_COMPILED = False
+_ENABLE_CUDA_MSDA = True
 try:
     from detrex import _C
     _KERNEL_COMPILED = True
