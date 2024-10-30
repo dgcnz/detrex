@@ -101,8 +101,6 @@ def multi_scale_deformable_attn_pytorch(
     sampling_locations: torch.Tensor,
     attention_weights: torch.Tensor,
 ) -> torch.Tensor:
-    if check_if_dynamo_compiling():
-        assert isinstance(value_spatial_shapes, list)
     bs, _, num_heads, embed_dims = value.shape
     _, num_queries, num_heads, num_levels, num_points, _ = sampling_locations.shape
     value_list = value.split([H_ * W_ for H_, W_ in value_spatial_shapes], dim=1)
@@ -268,9 +266,7 @@ class MultiScaleDeformableAttention(nn.Module):
         Returns:
             torch.Tensor: forward results with shape `(num_query, bs, embed_dim)`
         """
-        if check_if_dynamo_compiling():
-            assert isinstance(spatial_shapes, list)
-
+        
         if value is None:
             value = query
 
